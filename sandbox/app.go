@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/tendermint/tendermint/abci/types"
@@ -25,8 +26,33 @@ func (app *SandboxApp) CheckTx(_ context.Context, req *types.RequestCheckTx) (*t
 	return &types.ResponseCheckTx{Code: code, GasWanted: gas}, nil
 }
 
+func (app *SandboxApp) PrepareProposal(_ context.Context, req *types.RequestPrepareProposal) (*types.ResponsePrepareProposal, error) {
+	// Let's sort transactions in the most profitable way according to gas consumption
+	txs := append(req.Txs[:0:0], req.Txs...)
+	sort.Slice(txs, func(i, j int) bool {
+		_, gasI := app.estimateTx(txs[i])
+		_, gasJ := app.estimateTx(txs[j])
+		return gasI > gasJ
+	})
+
+	trs := make([]*types.TxRecord, 0, len(txs))
+	var totalBytes int64
+	for _, tx := range txs {
+		totalBytes += int64(len(tx))
+		if totalBytes > req.MaxTxBytes {
+			break
+		}
+		trs = append(trs, &types.TxRecord{
+			Action: types.TxRecord_UNMODIFIED,
+			Tx:     tx,
+		})
+	}
+	return &types.ResponsePrepareProposal{TxRecords: trs}, nil
+}
+
 func (app *SandboxApp) FinalizeBlock(_ context.Context, req *types.RequestFinalizeBlock) (*types.ResponseFinalizeBlock, error) {
 	respTxs := make([]*types.ExecTxResult, len(req.Txs))
+	// At this stage the transactions are already sorted
 	for i, tx := range req.Txs {
 		respTxs[i] = app.handleTx(tx)
 	}
