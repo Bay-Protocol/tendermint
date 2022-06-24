@@ -37,7 +37,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	app := NewSandboxApp()
+	app := NewSandboxApp(config.Mempool.PrioritizeHigherGasTxs)
 	tmNode, err := newTendermint(ctx, app, config)
 	if err != nil {
 		panic(err)

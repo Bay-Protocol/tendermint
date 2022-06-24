@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,15 @@ var _ Mempool = (*TxMempool)(nil)
 
 // TxMempoolOption sets an optional parameter on the TxMempool.
 type TxMempoolOption func(*TxMempool)
+
+type TxPriorityQueueInterface interface {
+	heap.Interface
+	GetEvictableTxs(priority, txSize, totalSize, cap int64) []*WrappedTx
+	NumTxs() int
+	RemoveTx(tx *WrappedTx)
+	PushTx(tx *WrappedTx)
+	PopTx() *WrappedTx
+}
 
 // TxMempool defines a prioritized mempool data structure used by the v1 mempool
 // reactor. It keeps a thread-safe priority queue of transactions that is used
@@ -71,7 +81,7 @@ type TxMempool struct {
 
 	// priorityIndex defines the priority index of valid transactions via a
 	// thread-safe priority queue.
-	priorityIndex *TxPriorityQueue
+	priorityIndex TxPriorityQueueInterface
 
 	// heightIndex defines a height-based, in ascending order, transaction index.
 	// i.e. older transactions are first.
@@ -98,15 +108,14 @@ func NewTxMempool(
 ) *TxMempool {
 
 	txmp := &TxMempool{
-		logger:        logger,
-		config:        cfg,
-		proxyAppConn:  proxyAppConn,
-		height:        -1,
-		cache:         NopTxCache{},
-		metrics:       NopMetrics(),
-		txStore:       NewTxStore(),
-		gossipIndex:   clist.New(),
-		priorityIndex: NewTxPriorityQueue(),
+		logger:       logger,
+		config:       cfg,
+		proxyAppConn: proxyAppConn,
+		height:       -1,
+		cache:        NopTxCache{},
+		metrics:      NopMetrics(),
+		txStore:      NewTxStore(),
+		gossipIndex:  clist.New(),
 		heightIndex: NewWrappedTxList(func(wtx1, wtx2 *WrappedTx) bool {
 			return wtx1.height >= wtx2.height
 		}),
@@ -121,6 +130,12 @@ func NewTxMempool(
 
 	for _, opt := range options {
 		opt(txmp)
+	}
+
+	if cfg.PrioritizeHigherGasTxs {
+		txmp.priorityIndex = NewTxGasPriorityQueue()
+	} else {
+		txmp.priorityIndex = NewTxPriorityQueue()
 	}
 
 	return txmp
@@ -517,7 +532,6 @@ func (txmp *TxMempool) initTxCallback(wtx *WrappedTx, res *abci.ResponseCheckTx,
 	}
 
 	sender := res.Sender
-	priority := res.Priority
 
 	if len(sender) > 0 {
 		if wtx := txmp.txStore.GetTxBySender(sender); wtx != nil {
@@ -531,9 +545,17 @@ func (txmp *TxMempool) initTxCallback(wtx *WrappedTx, res *abci.ResponseCheckTx,
 		}
 	}
 
+	var evictionPriority int64
+	switch txmp.priorityIndex.(type) {
+	case *TxGasPriorityQueue:
+		evictionPriority = res.GasWanted
+	default:
+		evictionPriority = res.Priority
+	}
+
 	if err := txmp.canAddTx(wtx); err != nil {
 		evictTxs := txmp.priorityIndex.GetEvictableTxs(
-			priority,
+			evictionPriority,
 			int64(wtx.Size()),
 			txmp.SizeBytes(),
 			txmp.config.MaxTxsBytes,
@@ -570,7 +592,7 @@ func (txmp *TxMempool) initTxCallback(wtx *WrappedTx, res *abci.ResponseCheckTx,
 	}
 
 	wtx.gasWanted = res.GasWanted
-	wtx.priority = priority
+	wtx.priority = res.Priority
 	wtx.sender = sender
 	wtx.peers = map[uint16]struct{}{
 		txInfo.SenderID: {},

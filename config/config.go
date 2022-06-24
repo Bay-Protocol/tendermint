@@ -768,6 +768,10 @@ type MempoolConfig struct {
 	// has existed in the mempool at least TTLNumBlocks number of blocks or if
 	// it's insertion time into the mempool is beyond TTLDuration.
 	TTLNumBlocks int64 `mapstructure:"ttl-num-blocks"`
+
+	// Use a priority transaction queue sorted by the highest GasWanted value
+	// to extract the maximum profit
+	PrioritizeHigherGasTxs bool `mapstructure:"prioritize-higher-gas-txs"`
 }
 
 // DefaultMempoolConfig returns a default configuration for the Tendermint mempool.

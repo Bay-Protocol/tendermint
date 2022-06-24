@@ -323,6 +323,10 @@ ttl-duration = "0s"
 # it's insertion time into the mempool is beyond ttl-duration.
 ttl-num-blocks = 0
 
+# Use a priority transaction queue sorted by the highest GasWanted value
+# to extract the maximum profit
+prioritize-higher-gas-txs = true
+
 #######################################################
 ###         State Sync Configuration Options        ###
 #######################################################
